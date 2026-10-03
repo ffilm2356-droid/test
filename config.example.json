@@ -1,4 +1,16 @@
 {
+  "google_ai": {
+    "api_key": "",
+    "api_keys": ["key1", "key2", "key3"],
+    "enabled": true
+  },
+  "elevenlabs": {
+    "api_key": "",
+    "api_keys": ["key1", "key2"],
+    "voice_id": "21m00Tcm4TlvDq8ikWAM",
+    "model_id": "eleven_multilingual_v2",
+    "enabled": true
+  },
   "unsplash": {
     "api_key": "",
     "enabled": true
@@ -8,10 +20,6 @@
     "enabled": true
   },
   "pixabay": {
-    "api_key": "",
-    "enabled": true
-  },
-  "google_ai": {
     "api_key": "",
     "enabled": true
   },

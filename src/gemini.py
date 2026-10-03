@@ -1,7 +1,7 @@
 """Gemini chat/agent — Google AI Studio API.
 
 Pure REST API. No browser, no BotGuard.
-Supports text generation, multimodal input, and structured output.
+Multi-key rotation for high throughput.
 """
 
 from __future__ import annotations
@@ -9,8 +9,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
-import os
 from typing import Optional
+
+from .key_pool import KeyPool
 
 log = logging.getLogger("mediaforge.gemini")
 
@@ -18,19 +19,48 @@ BASE = "https://generativelanguage.googleapis.com/v1beta"
 
 
 class GeminiClient:
-    """Async Gemini chat client via REST API."""
+    """Async Gemini chat client via REST API with multi-key rotation."""
 
-    def __init__(self, api_key: str, model: str = "gemini-3.8-flash",
-                 http_client=None, concurrency: int = 50):
-        self.api_key = api_key
+    def __init__(self, api_key: str = "", model: str = "gemini-3.8-flash",
+                 http_client=None, concurrency: int = 50,
+                 api_keys: Optional[list[str]] = None):
         self.model = model
         self.http = http_client
         self._sem = asyncio.Semaphore(concurrency)
 
+        keys = list(api_keys) if api_keys else []
+        if api_key and api_key not in keys:
+            keys.insert(0, api_key)
+        if not keys:
+            raise ValueError("GeminiClient requires at least one API key")
+        self._key_pool = KeyPool(keys)
+
+    async def _call_api(self, body: dict) -> dict:
+        for attempt in range(3):
+            key = await self._key_pool.get()
+            url = f"{BASE}/models/{self.model}:generateContent?key={key}"
+            try:
+                async with self._sem:
+                    if self.http:
+                        data = await self.http.post_json(url, json=body, retries=1)
+                    else:
+                        import aiohttp
+                        async with aiohttp.ClientSession() as s:
+                            async with s.post(url, json=body) as r:
+                                r.raise_for_status()
+                                data = await r.json()
+                await self._key_pool.report_success(key)
+                return data
+            except Exception as e:
+                if "429" in str(e):
+                    await self._key_pool.report_error(key, cooldown=30.0)
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(2.0 * (attempt + 1))
+
     async def generate(self, prompt: str, system: Optional[str] = None,
                        temperature: float = 0.7, max_tokens: int = 2048,
                        json_mode: bool = False) -> str:
-        url = f"{BASE}/models/{self.model}:generateContent?key={self.api_key}"
         contents = [{"parts": [{"text": prompt}]}]
         body: dict = {
             "contents": contents,
@@ -44,19 +74,10 @@ class GeminiClient:
         if json_mode:
             body["generationConfig"]["responseMimeType"] = "application/json"
 
-        async with self._sem:
-            if self.http:
-                data = await self.http.post_json(url, json=body)
-            else:
-                import aiohttp
-                async with aiohttp.ClientSession() as s:
-                    async with s.post(url, json=body) as r:
-                        r.raise_for_status()
-                        data = await r.json()
-
+        data = await self._call_api(body)
         candidates = data.get("candidates", [])
         if not candidates:
-            raise RuntimeError(f"Gemini returned no candidates")
+            raise RuntimeError("Gemini returned no candidates")
         parts = candidates[0].get("content", {}).get("parts", [])
         return "".join(p.get("text", "") for p in parts)
 
@@ -70,7 +91,6 @@ class GeminiClient:
         elif image_path.endswith(".webp"):
             mime = "image/webp"
 
-        url = f"{BASE}/models/{self.model}:generateContent?key={self.api_key}"
         body = {
             "contents": [{
                 "parts": [
@@ -84,16 +104,7 @@ class GeminiClient:
             "generationConfig": {"temperature": temperature},
         }
 
-        async with self._sem:
-            if self.http:
-                data = await self.http.post_json(url, json=body)
-            else:
-                import aiohttp
-                async with aiohttp.ClientSession() as s:
-                    async with s.post(url, json=body) as r:
-                        r.raise_for_status()
-                        data = await r.json()
-
+        data = await self._call_api(body)
         candidates = data.get("candidates", [])
         if not candidates:
             raise RuntimeError("Gemini returned no candidates")

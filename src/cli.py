@@ -30,8 +30,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--unsplash-key", help="Unsplash API key")
     p.add_argument("--pexels-key", help="Pexels API key")
     p.add_argument("--pixabay-key", help="Pixabay API key")
-    p.add_argument("--google-ai-key", help="Google AI Studio API key")
+    p.add_argument("--google-ai-key", action="append", default=[],
+                   help="Google AI Studio API key (repeatable for multi-key rotation)")
     p.add_argument("--gemini-tts-voice", help="Gemini TTS voice (default: Kore)")
+    p.add_argument("--elevenlabs-key", action="append", default=[],
+                   help="ElevenLabs API key (repeatable for multi-key rotation)")
+    p.add_argument("--elevenlabs-voice", help="ElevenLabs voice ID")
+    p.add_argument("--tts-engine", choices=["auto", "gemini", "elevenlabs", "edge"],
+                   help="TTS engine to use")
     p.add_argument("-v", "--verbose", action="store_true", help="Verbose logging")
     p.add_argument("--dry-run", action="store_true",
                    help="Plan shots and report without rendering")
@@ -72,9 +78,19 @@ def main():
     if args.pixabay_key:
         config_dict.setdefault("pixabay", {})["api_key"] = args.pixabay_key
     if args.google_ai_key:
-        config_dict.setdefault("google_ai", {})["api_key"] = args.google_ai_key
+        gai = config_dict.setdefault("google_ai", {})
+        gai["api_key"] = args.google_ai_key[0]
+        if len(args.google_ai_key) > 1:
+            gai["api_keys"] = args.google_ai_key
     if args.gemini_tts_voice:
         config_dict["gemini_tts_voice"] = args.gemini_tts_voice
+    if args.elevenlabs_key:
+        el = config_dict.setdefault("elevenlabs", {})
+        el["api_key"] = args.elevenlabs_key[0]
+        if len(args.elevenlabs_key) > 1:
+            el["api_keys"] = args.elevenlabs_key
+    if args.elevenlabs_voice:
+        config_dict.setdefault("elevenlabs", {})["voice_id"] = args.elevenlabs_voice
     if args.workers:
         config_dict["max_workers"] = args.workers
     if args.width:
@@ -104,13 +120,18 @@ def main():
                 if 'vq' in v:
                     queries.add(v['vq'])
         print(f"Unique queries: {len(queries)}")
+        gai_keys = len(config.google_ai.api_keys) or (1 if config.google_ai.api_key else 0)
+        el_keys = len(config.elevenlabs.api_keys) or (1 if config.elevenlabs.api_key else 0)
         print(f"Providers: wikimedia" +
               (", unsplash" if config.unsplash.api_key else "") +
               (", pexels" if config.pexels.api_key else "") +
               (", pixabay" if config.pixabay.api_key else "") +
-              (", google_ai (imagen+veo)" if config.google_ai.api_key else ""))
-        print(f"TTS: {'gemini' if config.google_ai.api_key else 'edge-tts'}" +
-              (f" (voice={config.gemini_tts_voice})" if config.google_ai.api_key else f" (voice={config.tts_voice})"))
+              (f", google_ai ({gai_keys} keys)" if config.google_ai.api_key else ""))
+        tts_name = "elevenlabs" if el_keys else ("gemini" if gai_keys else "edge-tts")
+        print(f"TTS: {tts_name}" +
+              (f" ({el_keys} keys)" if el_keys else
+               f" (voice={config.gemini_tts_voice})" if gai_keys else
+               f" (voice={config.tts_voice})"))
         print(f"Proxy: {'enabled' if config.proxy.enabled else 'disabled'}" +
               (f" ({len(config.proxy.proxies)} proxies)" if config.proxy.proxies else ""))
         return

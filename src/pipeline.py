@@ -35,6 +35,7 @@ from .providers.google_ai import GoogleAIProvider
 from .proxy import HttpClient, ProxyPool
 from .tts import generate_tts
 from .gemini_tts import generate_tts_gemini
+from .elevenlabs_tts import generate_tts_elevenlabs
 
 log = logging.getLogger("mediaforge.pipeline")
 
@@ -135,14 +136,28 @@ async def render_spec(
     errors: list[str] = []
 
     # --- Stage 1: TTS ---
-    use_gemini_tts = spec.get("tts") == "gemini" or (
-        config.google_ai.api_key and not spec.get("tts", "").startswith("edge"))
-    if use_gemini_tts and config.google_ai.api_key:
+    tts_engine = spec.get("tts", "auto")
+    if tts_engine == "elevenlabs" or (
+            tts_engine == "auto" and config.elevenlabs.enabled and
+            (config.elevenlabs.api_key or config.elevenlabs.api_keys)):
+        log.info("[1/4] ElevenLabs TTS %d segments", len(segs))
+        tts_paths = await generate_tts_elevenlabs(
+            segs, tmp,
+            api_key=config.elevenlabs.api_key,
+            api_keys=config.elevenlabs.api_keys,
+            voice_id=config.elevenlabs.voice_id,
+            model_id=config.elevenlabs.model_id,
+            http_client=http, cache=cache,
+        )
+    elif tts_engine == "gemini" or (
+            tts_engine == "auto" and config.google_ai.api_key):
         gemini_voice = spec.get("gemini_voice", config.gemini_tts_voice)
+        google_keys = config.google_ai.api_keys if config.google_ai.api_keys else None
         log.info("[1/4] Gemini TTS %d segments (voice=%s)", len(segs), gemini_voice)
         tts_paths = await generate_tts_gemini(
             segs, tmp, config.google_ai.api_key, gemini_voice,
             config.gemini_tts_concurrency, http, cache,
+            api_keys=google_keys,
         )
     else:
         log.info("[1/4] Edge TTS %d segments", len(segs))

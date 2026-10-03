@@ -2,6 +2,7 @@
 
 Pure REST API. No browser, no BotGuard, no captcha.
 Uses generativelanguage.googleapis.com endpoints directly.
+Multi-key rotation for high throughput (50K+ images/day).
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from ..config import ProviderConfig
 from ..proxy import HttpClient
 from ..cache import MediaCache
 from ..rate_limiter import TokenBucket
+from ..key_pool import KeyPool
 from .base import MediaItem, SearchResult
 
 log = logging.getLogger("mediaforge.google_ai")
@@ -24,10 +26,15 @@ log = logging.getLogger("mediaforge.google_ai")
 BASE = "https://generativelanguage.googleapis.com/v1beta"
 IMAGE_MODEL = "gemini-3.1-flash-image"
 VEO_MODEL = "veo-3.1-generate-preview"
+CHAT_MODEL = "gemini-3.8-flash"
 
 
 class GoogleAIProvider:
-    """Generative provider: creates images/videos from prompts via Google AI Studio API."""
+    """Generative provider: creates images/videos from prompts via Google AI Studio API.
+
+    Supports multi-key rotation: pass multiple keys via api_keys config
+    to spread quota across accounts (2-3 keys = 50K+ images/day).
+    """
 
     def __init__(self, cfg: ProviderConfig, http: HttpClient, cache: MediaCache,
                  concurrency: int = 50):
@@ -38,19 +45,45 @@ class GoogleAIProvider:
         self._sem = asyncio.Semaphore(concurrency)
         self._gen_count = 0
 
-    @property
-    def api_key(self) -> str:
-        return self.cfg.api_key
+        keys = list(cfg.api_keys) if cfg.api_keys else []
+        if cfg.api_key and cfg.api_key not in keys:
+            keys.insert(0, cfg.api_key)
+        if not keys:
+            raise ValueError("GoogleAIProvider requires at least one API key")
+        self._key_pool = KeyPool(keys)
+        log.info("GoogleAI: %d API key(s), concurrency=%d", len(keys), concurrency)
 
-    async def _post_json(self, url: str, body: dict, retries: int = 5) -> dict:
+    async def _get_key(self) -> str:
+        return await self._key_pool.get()
+
+    async def _post_json(self, url_template: str, body: dict, retries: int = 5) -> dict:
         await self._limiter.acquire()
-        async with self._sem:
-            return await self.http.post_json(url, json=body, retries=retries)
+        last_err = None
+        for attempt in range(retries):
+            key = await self._get_key()
+            url = url_template.replace("{KEY}", key)
+            try:
+                async with self._sem:
+                    data = await self.http.post_json(url, json=body, retries=1)
+                await self._key_pool.report_success(key)
+                return data
+            except Exception as e:
+                last_err = e
+                is_rate_limit = "429" in str(e) or "Too Many" in str(e)
+                if is_rate_limit:
+                    await self._key_pool.report_error(key, cooldown=30.0)
+                    log.debug("key ...%s rate-limited, rotating", key[-6:])
+                else:
+                    log.debug("POST fail attempt %d: %s", attempt, e)
+                if attempt < retries - 1:
+                    delay = 2.0 if is_rate_limit else (1.5 ** attempt)
+                    await asyncio.sleep(delay)
+        raise ConnectionError(f"GoogleAI POST failed after {retries} attempts: {last_err}")
 
     # --- Image generation (generateContent with IMAGE modality) ---
 
     async def generate_image(self, prompt: str, count: int = 1) -> list[bytes]:
-        url = f"{BASE}/models/{IMAGE_MODEL}:generateContent?key={self.api_key}"
+        url = f"{BASE}/models/{IMAGE_MODEL}:generateContent?key={{KEY}}"
         body = {
             "contents": [{"parts": [{"text": f"Generate an image: {prompt}"}]}],
             "generationConfig": {
@@ -90,7 +123,7 @@ class GoogleAIProvider:
     async def generate_video(self, prompt: str, duration: int = 5,
                              aspect: str = "16:9",
                              ref_image: Optional[bytes] = None) -> bytes:
-        url = f"{BASE}/models/{VEO_MODEL}:predictLongRunning?key={self.api_key}"
+        url = f"{BASE}/models/{VEO_MODEL}:predictLongRunning?key={{KEY}}"
         instance: dict = {"prompt": prompt}
         if ref_image:
             instance["image"] = {
@@ -112,11 +145,12 @@ class GoogleAIProvider:
         return await self._poll_operation(op_name)
 
     async def _poll_operation(self, op_name: str, timeout: float = 300) -> bytes:
-        url = f"{BASE}/{op_name}?key={self.api_key}"
         deadline = time.monotonic() + timeout
         delay = 2.0
         while time.monotonic() < deadline:
             await asyncio.sleep(delay)
+            key = await self._get_key()
+            url = f"{BASE}/{op_name}?key={key}"
             data = await self.http.get_json(url)
             if data.get("done"):
                 resp = data.get("response", {})
@@ -179,6 +213,9 @@ class GoogleAIProvider:
         if item.kind == "video":
             return await self.generate_video_to_file(prompt, dest + ".mp4")
         return await self.generate_image_to_file(prompt, dest + ".jpg")
+
+    def key_stats(self) -> list[dict]:
+        return self._key_pool.stats()
 
 
 # --- Batch helpers for speed ---

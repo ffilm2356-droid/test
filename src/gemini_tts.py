@@ -1,7 +1,7 @@
 """Gemini TTS — text-to-speech via Google AI Studio API.
 
 Pure REST API. No browser, no BotGuard.
-Uses gemini-2.5-flash-preview-tts model for high-quality neural TTS.
+Multi-key rotation for high throughput.
 """
 
 from __future__ import annotations
@@ -11,6 +11,8 @@ import base64
 import logging
 import os
 from typing import Optional
+
+from .key_pool import KeyPool
 
 log = logging.getLogger("mediaforge.gemini_tts")
 
@@ -46,14 +48,12 @@ async def gemini_tts(
 
     async def _do():
         if http_client:
-            data = await http_client.post_json(url, json=body)
-        else:
-            import aiohttp
-            async with aiohttp.ClientSession() as s:
-                async with s.post(url, json=body) as r:
-                    r.raise_for_status()
-                    data = await r.json()
-        return data
+            return await http_client.post_json(url, json=body)
+        import aiohttp
+        async with aiohttp.ClientSession() as s:
+            async with s.post(url, json=body) as r:
+                r.raise_for_status()
+                return await r.json()
 
     for attempt in range(3):
         try:
@@ -88,14 +88,21 @@ async def gemini_tts(
 async def generate_tts_gemini(
     segments: list[dict],
     output_dir: str,
-    api_key: str,
+    api_key: str = "",
     voice: str = "Kore",
     concurrency: int = 20,
     http_client=None,
     cache=None,
+    api_keys: Optional[list[str]] = None,
 ) -> list[str]:
+    keys = list(api_keys) if api_keys else []
+    if api_key and api_key not in keys:
+        keys.insert(0, api_key)
+    if not keys:
+        raise ValueError("Gemini TTS requires at least one API key")
+
+    key_pool = KeyPool(keys)
     sem = asyncio.Semaphore(concurrency)
-    paths = []
 
     async def _gen(i: int, text: str) -> str:
         dest = os.path.join(output_dir, f"vo_{i:03d}.wav")
@@ -107,16 +114,21 @@ async def generate_tts_gemini(
                 shutil.copy2(cached, dest)
                 return dest
 
-        await gemini_tts(text, dest, api_key, voice, http_client, sem)
+        key = await key_pool.get()
+        try:
+            await gemini_tts(text, dest, key, voice, http_client, sem)
+            await key_pool.report_success(key)
+        except Exception as e:
+            if "429" in str(e) or "Too Many" in str(e):
+                await key_pool.report_error(key, cooldown=30.0)
+            raise
 
         if cache:
             cache.put(f"gemini-tts:{voice}:{text}", dest)
         return dest
 
-    tasks = []
-    for i, seg in enumerate(segments):
-        tasks.append(_gen(i, seg["vo"]))
-
+    tasks = [_gen(i, seg["vo"]) for i, seg in enumerate(segments)]
     paths = await asyncio.gather(*tasks)
-    log.info("Gemini TTS: generated %d segments (voice=%s)", len(paths), voice)
+    log.info("Gemini TTS: generated %d segments (%d keys, voice=%s)",
+             len(paths), key_pool.size, voice)
     return list(paths)

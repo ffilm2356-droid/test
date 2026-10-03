@@ -29,8 +29,18 @@ class RateLimit:
 class ProviderConfig:
     name: str
     api_key: str = ""
+    api_keys: list[str] = field(default_factory=list)
     base_url: str = ""
     rate_limit: RateLimit = field(default_factory=RateLimit)
+    enabled: bool = True
+
+
+@dataclass
+class ElevenLabsConfig:
+    api_key: str = ""
+    api_keys: list[str] = field(default_factory=list)
+    voice_id: str = "21m00Tcm4TlvDq8ikWAM"
+    model_id: str = "eleven_multilingual_v2"
     enabled: bool = True
 
 
@@ -73,6 +83,8 @@ class Config:
         rate_limit=RateLimit(calls_per_second=30, burst=60),
     ))
 
+    elevenlabs: ElevenLabsConfig = field(default_factory=ElevenLabsConfig)
+
     gemini_tts_voice: str = "Kore"
     gemini_tts_concurrency: int = 20
 
@@ -87,6 +99,15 @@ class Config:
         cfg.pexels.api_key = os.getenv("PEXELS_API_KEY", "")
         cfg.pixabay.api_key = os.getenv("PIXABAY_API_KEY", "")
         cfg.google_ai.api_key = os.getenv("GOOGLE_AI_API_KEY", "")
+        cfg.elevenlabs.api_key = os.getenv("ELEVENLABS_API_KEY", "")
+
+        google_keys = os.getenv("GOOGLE_AI_API_KEYS", "")
+        if google_keys:
+            cfg.google_ai.api_keys = [k.strip() for k in google_keys.split(",") if k.strip()]
+
+        el_keys = os.getenv("ELEVENLABS_API_KEYS", "")
+        if el_keys:
+            cfg.elevenlabs.api_keys = [k.strip() for k in el_keys.split(",") if k.strip()]
 
         proxy_list = os.getenv("MEDIAFORGE_PROXIES", "")
         if proxy_list:
@@ -122,7 +143,15 @@ class Config:
             if key in d:
                 prov = getattr(cfg, key)
                 prov.api_key = d[key].get("api_key", prov.api_key)
+                prov.api_keys = d[key].get("api_keys", prov.api_keys)
                 prov.enabled = d[key].get("enabled", prov.enabled)
+        if "elevenlabs" in d:
+            el = d["elevenlabs"]
+            cfg.elevenlabs.api_key = el.get("api_key", cfg.elevenlabs.api_key)
+            cfg.elevenlabs.api_keys = el.get("api_keys", cfg.elevenlabs.api_keys)
+            cfg.elevenlabs.voice_id = el.get("voice_id", cfg.elevenlabs.voice_id)
+            cfg.elevenlabs.model_id = el.get("model_id", cfg.elevenlabs.model_id)
+            cfg.elevenlabs.enabled = el.get("enabled", cfg.elevenlabs.enabled)
         for key in ("width", "height", "fps", "max_workers", "tts_voice", "tts_rate",
                     "gemini_tts_voice", "gemini_tts_concurrency"):
             if key in d:
