@@ -1,33 +1,139 @@
-# 5 video bám sát đối thủ
+# MediaForge
 
-Bộ hồ sơ sản xuất 5 video YouTube dạng **phim tài liệu kinh doanh, không lộ mặt, lời đọc tiếng Anh**, dựng theo công thức của kênh đối thủ (6 video tham chiếu).
+API-first media generation pipeline. No browser, no captcha, no headless Chrome.
 
-| File | Nội dung |
-|------|----------|
-| [00-phan-tich-doi-thu.md](00-phan-tich-doi-thu.md) | Phân tích 6 video đối thủ: định vị, cấu trúc hook theo từng giây, quy tắc câu chữ, ngôn ngữ hình ảnh |
-| [video-01-may-tro-thinh.md](video-01-may-tro-thinh.md) | Máy trợ thính $4,000 vs $99 — "Big Five" chiếm >90% thị trường |
-| [video-02-byd-vs-tesla.md](video-02-byd-vs-tesla.md) | BYD vượt Tesla năm 2025 (2,26 triệu vs 1,64 triệu xe) |
-| [video-03-gillette.md](video-03-gillette.md) | Gillette, Dollar Shave Club và vụ FTC chặn thương vụ Harry's |
-| [video-04-duong-sat-cao-toc.md](video-04-duong-sat-cao-toc.md) | Trung Quốc 48.000 km đường sắt cao tốc vs California 0 km |
-| [video-05-lego.md](video-05-lego.md) | LEGO hết bằng sáng chế, Lepin đi tù, Blokees lên số 3 thế giới |
+## Features
 
-## Mỗi video gồm
+- **Pure API** — all media fetched via REST APIs (Wikimedia Commons, Unsplash, Pexels, Pixabay)
+- **10x faster** — async I/O, parallel downloads, concurrent FFmpeg rendering
+- **VPN-to-proxy** — built-in SOCKS5/HTTP proxy rotation, use your VPN as a proxy
+- **Content cache** — SHA256-keyed dedup, skip re-downloads across runs
+- **Rate limiting** — per-provider token-bucket, no bans
+- **Server-ready** — importable module + CLI, no GUI dependencies
 
-1. 3 tiêu đề để A/B test + ý tưởng thumbnail
-2. **Hook 0:00–1:05 dựng sẵn từng cảnh** (timecode, lời đọc, hình ảnh), nhịp 2–4 giây/cảnh như đối thủ
-3. Lời đọc đầy đủ cho 5 chương + kết, có ghi chú hình ảnh cho từng chương
-4. 5 prompt B-roll AI (Seedance / Kling, 16:9, 5 giây)
-5. Danh sách số liệu và nguồn **cần kiểm chứng trước khi đăng**
+## Quick Start
 
-## Quy trình dựng đề xuất
+```bash
+pip install -e .
 
-1. Kiểm chứng số liệu theo mục cuối mỗi file; câu nào không có nguồn thì bỏ.
-2. Thu giọng đọc (hoặc TTS), tốc độ ~150–160 từ/phút.
-3. Ghép B-roll: stock có bản quyền + clip AI từ prompt + đồ họa dữ liệu (nền lưới đen, thanh đỏ chữ trắng, timeline lưới trắng có marker kim cương đỏ).
-4. Nhạc nền upbeat nhẹ, SFX (mở hộp, màn trập, cơ khí), cắt 2–4 giây/cảnh trong 1–2 phút đầu.
-5. Đặt CTA "Like & subscribe… Let's get into it" ở cuối hook; end screen trỏ sang video khác trong bộ.
+# minimal (Wikimedia Commons only, no API key needed)
+python -m src spec.json output/
 
-## Lưu ý
+# with API keys for more sources
+export UNSPLASH_ACCESS_KEY=your_key
+export PEXELS_API_KEY=your_key
+export PIXABAY_API_KEY=your_key
+python -m src spec.json output/
 
-- Không dùng logo/thương hiệu thật trong clip AI; ảnh người thật chỉ dùng ảnh báo chí có giấy phép.
-- Đoạn lịch sử và pháp lý phải giữ đúng nguồn: kênh dạng này sống nhờ độ tin cậy.
+# with proxy rotation
+python -m src spec.json output/ \
+  -p socks5://127.0.0.1:1080 \
+  -p http://proxy2:8080
+
+# with VPN gateway
+python -m src spec.json output/ \
+  --vpn-gateway 10.8.0.1 \
+  --vpn-interface tun0
+```
+
+## Config
+
+Copy `config.example.json` and fill in API keys:
+
+```bash
+cp config.example.json config.json
+python -m src spec.json output/ -c config.json
+```
+
+Environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `UNSPLASH_ACCESS_KEY` | Unsplash API key |
+| `PEXELS_API_KEY` | Pexels API key |
+| `PIXABAY_API_KEY` | Pixabay API key |
+| `MEDIAFORGE_PROXIES` | Comma-separated proxy URLs |
+| `MEDIAFORGE_VPN_GATEWAY` | VPN gateway address |
+| `MEDIAFORGE_VPN_INTERFACE` | VPN interface (default: tun0) |
+| `MEDIAFORGE_CACHE_DIR` | Cache directory path |
+| `MEDIAFORGE_WORKERS` | Parallel FFmpeg workers |
+
+## Spec Format
+
+```json
+{
+  "id": "video-01",
+  "title": "Video Title",
+  "voice": "en-US-ChristopherNeural",
+  "rate": "+6%",
+  "gap": 0.28,
+  "seed": 7,
+  "maxshot": 4.2,
+  "workers": 6,
+  "music": "/path/to/bgm.mp3",
+  "fallback": ["city skyline", "technology"],
+  "segments": [
+    {
+      "vo": "Voiceover text for this segment.",
+      "v": [
+        {"q": "search query", "lower": "Lower third text"},
+        {"vq": "video search query"},
+        {"card": {"t": "big", "text": "$4,000", "sub": "Subtitle"}}
+      ]
+    }
+  ]
+}
+```
+
+### Card Types
+
+| Type | Fields |
+|------|--------|
+| `big` | `text`, `sub`, `color` |
+| `bars` | `title`, `items` (array of [label, value, display]), `hl` |
+| `pct` | `title`, `pct`, `label` |
+| `timeline` | `title`, `points` (array of [year, label]), `hl` |
+| `boxes` | `parent`, `items`, `hl`, `caption` |
+| `doc` | `head`, `body`, `stamp` |
+| `text` | `text`, `sub`, `red` |
+| `vs` | `left`, `right` (each [label, value]), `hl` |
+
+## Architecture
+
+```
+src/
+  __init__.py          # package root
+  config.py            # API keys, proxy config, rate limits
+  proxy.py             # proxy rotation, VPN gateway, SOCKS5
+  cache.py             # content-addressable cache
+  rate_limiter.py      # token-bucket rate limiter
+  providers/
+    base.py            # abstract provider + MediaItem type
+    commons.py         # Wikimedia Commons (free, no key)
+    unsplash.py        # Unsplash API
+    pexels.py          # Pexels API (photos + videos)
+    pixabay.py         # Pixabay API (photos + videos)
+  tts.py               # async TTS via edge-tts
+  cards.py             # Pillow-based data cards (8 types)
+  composer.py          # async FFmpeg compositing
+  pipeline.py          # main orchestrator
+  cli.py               # CLI entry point
+```
+
+## As a Module
+
+```python
+import asyncio
+from src.pipeline import render_spec
+from src.config import Config
+
+config = Config.from_env()
+result = asyncio.run(render_spec("spec.json", "output/", config))
+print(result.output_path, result.duration)
+```
+
+## Requirements
+
+- Python 3.10+
+- FFmpeg + ffprobe
+- System fonts (DejaVu or Montserrat recommended)

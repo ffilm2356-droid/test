@@ -1,0 +1,29 @@
+{
+  "unsplash": {
+    "api_key": "",
+    "enabled": true
+  },
+  "pexels": {
+    "api_key": "",
+    "enabled": true
+  },
+  "pixabay": {
+    "api_key": "",
+    "enabled": true
+  },
+  "proxy": {
+    "enabled": false,
+    "proxies": [
+      "socks5://127.0.0.1:1080",
+      "http://user:pass@proxy.example.com:8080"
+    ],
+    "rotate_every": 25,
+    "vpn_gateway": null,
+    "vpn_interface": "tun0"
+  },
+  "max_workers": 8,
+  "width": 1280,
+  "height": 720,
+  "tts_voice": "en-US-ChristopherNeural",
+  "tts_rate": "+6%"
+}
