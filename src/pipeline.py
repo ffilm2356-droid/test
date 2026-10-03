@@ -31,8 +31,10 @@ from .providers.commons import CommonsProvider
 from .providers.unsplash import UnsplashProvider
 from .providers.pexels import PexelsProvider
 from .providers.pixabay import PixabayProvider
+from .providers.google_ai import GoogleAIProvider
 from .proxy import HttpClient, ProxyPool
 from .tts import generate_tts
+from .gemini_tts import generate_tts_gemini
 
 log = logging.getLogger("mediaforge.pipeline")
 
@@ -126,15 +128,27 @@ async def render_spec(
         providers.append(PexelsProvider(config.pexels, http, cache))
     if config.pixabay.api_key and config.pixabay.enabled:
         providers.append(PixabayProvider(config.pixabay, http, cache))
+    if config.google_ai.api_key and config.google_ai.enabled:
+        providers.append(GoogleAIProvider(config.google_ai, http, cache))
 
     pool = MediaPool(providers)
     errors: list[str] = []
 
     # --- Stage 1: TTS ---
-    log.info("[1/4] TTS %d segments", len(segs))
-    tts_paths = await generate_tts(
-        segs, tmp, voice, rate, config.tts_concurrency, cache,
-    )
+    use_gemini_tts = spec.get("tts") == "gemini" or (
+        config.google_ai.api_key and not spec.get("tts", "").startswith("edge"))
+    if use_gemini_tts and config.google_ai.api_key:
+        gemini_voice = spec.get("gemini_voice", config.gemini_tts_voice)
+        log.info("[1/4] Gemini TTS %d segments (voice=%s)", len(segs), gemini_voice)
+        tts_paths = await generate_tts_gemini(
+            segs, tmp, config.google_ai.api_key, gemini_voice,
+            config.gemini_tts_concurrency, http, cache,
+        )
+    else:
+        log.info("[1/4] Edge TTS %d segments", len(segs))
+        tts_paths = await generate_tts(
+            segs, tmp, voice, rate, config.tts_concurrency, cache,
+        )
 
     # --- Stage 2: Search (parallel) ---
     queries: set[tuple[str, str]] = set()

@@ -67,6 +67,14 @@ class Config:
         base_url="https://commons.wikimedia.org/w/api.php",
         rate_limit=RateLimit(calls_per_second=5, burst=10),
     ))
+    google_ai: ProviderConfig = field(default_factory=lambda: ProviderConfig(
+        name="google_ai",
+        base_url="https://generativelanguage.googleapis.com/v1beta",
+        rate_limit=RateLimit(calls_per_second=30, burst=60),
+    ))
+
+    gemini_tts_voice: str = "Kore"
+    gemini_tts_concurrency: int = 20
 
     tts_voice: str = "en-US-ChristopherNeural"
     tts_rate: str = "+6%"
@@ -78,6 +86,7 @@ class Config:
         cfg.unsplash.api_key = os.getenv("UNSPLASH_ACCESS_KEY", "")
         cfg.pexels.api_key = os.getenv("PEXELS_API_KEY", "")
         cfg.pixabay.api_key = os.getenv("PIXABAY_API_KEY", "")
+        cfg.google_ai.api_key = os.getenv("GOOGLE_AI_API_KEY", "")
 
         proxy_list = os.getenv("MEDIAFORGE_PROXIES", "")
         if proxy_list:
@@ -109,12 +118,13 @@ class Config:
             cfg.proxy.rotate_every = p.get("rotate_every", cfg.proxy.rotate_every)
             cfg.proxy.vpn_gateway = p.get("vpn_gateway", cfg.proxy.vpn_gateway)
             cfg.proxy.vpn_interface = p.get("vpn_interface", cfg.proxy.vpn_interface)
-        for key in ("unsplash", "pexels", "pixabay", "wikimedia"):
+        for key in ("unsplash", "pexels", "pixabay", "wikimedia", "google_ai"):
             if key in d:
                 prov = getattr(cfg, key)
                 prov.api_key = d[key].get("api_key", prov.api_key)
                 prov.enabled = d[key].get("enabled", prov.enabled)
-        for key in ("width", "height", "fps", "max_workers", "tts_voice", "tts_rate"):
+        for key in ("width", "height", "fps", "max_workers", "tts_voice", "tts_rate",
+                    "gemini_tts_voice", "gemini_tts_concurrency"):
             if key in d:
                 setattr(cfg, key, d[key])
         return cfg

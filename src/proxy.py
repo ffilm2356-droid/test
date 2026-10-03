@@ -172,6 +172,32 @@ class HttpClient:
         data = await self.get(url, headers=headers, params=params, retries=retries)
         return json.loads(data)
 
+    async def post_json(self, url: str, json: dict, headers: Optional[dict] = None,
+                        retries: int = 3) -> dict:
+        import json as _json
+        last_err = None
+        for attempt in range(retries):
+            t0 = time.monotonic()
+            try:
+                session = await self._get_session()
+                async with session.post(url, json=json, headers=headers) as resp:
+                    resp.raise_for_status()
+                    data = await resp.json()
+                    elapsed = time.monotonic() - t0
+                    if self.pool._proxies:
+                        await self.pool.report_success(
+                            self.pool._proxies[0].url, elapsed)
+                    return data
+            except Exception as e:
+                last_err = e
+                log.debug("POST fail attempt %d: %s — %s", attempt, url[:100], e)
+                if self.pool._proxies:
+                    await self.pool.report_failure(self.pool._proxies[0].url)
+                if attempt < retries - 1:
+                    await self._rotate_session()
+                    await asyncio.sleep(1.5 ** attempt)
+        raise ConnectionError(f"POST failed after {retries} attempts: {url[:120]}: {last_err}")
+
     async def download(self, url: str, dest: str, retries: int = 3) -> str:
         data = await self.get(url, retries=retries)
         with open(dest, "wb") as f:

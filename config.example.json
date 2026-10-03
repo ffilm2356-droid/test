@@ -11,6 +11,10 @@
     "api_key": "",
     "enabled": true
   },
+  "google_ai": {
+    "api_key": "",
+    "enabled": true
+  },
   "proxy": {
     "enabled": false,
     "proxies": [
@@ -25,5 +29,7 @@
   "width": 1280,
   "height": 720,
   "tts_voice": "en-US-ChristopherNeural",
-  "tts_rate": "+6%"
+  "tts_rate": "+6%",
+  "gemini_tts_voice": "Kore",
+  "gemini_tts_concurrency": 20
 }

@@ -30,6 +30,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--unsplash-key", help="Unsplash API key")
     p.add_argument("--pexels-key", help="Pexels API key")
     p.add_argument("--pixabay-key", help="Pixabay API key")
+    p.add_argument("--google-ai-key", help="Google AI Studio API key")
+    p.add_argument("--gemini-tts-voice", help="Gemini TTS voice (default: Kore)")
     p.add_argument("-v", "--verbose", action="store_true", help="Verbose logging")
     p.add_argument("--dry-run", action="store_true",
                    help="Plan shots and report without rendering")
@@ -69,6 +71,10 @@ def main():
         config_dict.setdefault("pexels", {})["api_key"] = args.pexels_key
     if args.pixabay_key:
         config_dict.setdefault("pixabay", {})["api_key"] = args.pixabay_key
+    if args.google_ai_key:
+        config_dict.setdefault("google_ai", {})["api_key"] = args.google_ai_key
+    if args.gemini_tts_voice:
+        config_dict["gemini_tts_voice"] = args.gemini_tts_voice
     if args.workers:
         config_dict["max_workers"] = args.workers
     if args.width:
@@ -101,7 +107,10 @@ def main():
         print(f"Providers: wikimedia" +
               (", unsplash" if config.unsplash.api_key else "") +
               (", pexels" if config.pexels.api_key else "") +
-              (", pixabay" if config.pixabay.api_key else ""))
+              (", pixabay" if config.pixabay.api_key else "") +
+              (", google_ai (imagen+veo)" if config.google_ai.api_key else ""))
+        print(f"TTS: {'gemini' if config.google_ai.api_key else 'edge-tts'}" +
+              (f" (voice={config.gemini_tts_voice})" if config.google_ai.api_key else f" (voice={config.tts_voice})"))
         print(f"Proxy: {'enabled' if config.proxy.enabled else 'disabled'}" +
               (f" ({len(config.proxy.proxies)} proxies)" if config.proxy.proxies else ""))
         return
