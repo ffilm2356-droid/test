@@ -15,7 +15,7 @@ from typing import Optional
 log = logging.getLogger("mediaforge.gemini_tts")
 
 BASE = "https://generativelanguage.googleapis.com/v1beta"
-TTS_MODEL = "gemini-2.5-flash-preview-tts"
+TTS_MODEL = "gemini-3.8-flash-tts"
 
 VOICES = [
     "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda",

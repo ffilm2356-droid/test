@@ -190,12 +190,15 @@ class HttpClient:
                     return data
             except Exception as e:
                 last_err = e
+                is_rate_limit = "429" in str(e) or "Too Many" in str(e)
                 log.debug("POST fail attempt %d: %s — %s", attempt, url[:100], e)
-                if self.pool._proxies:
+                if self.pool._proxies and not is_rate_limit:
                     await self.pool.report_failure(self.pool._proxies[0].url)
                 if attempt < retries - 1:
-                    await self._rotate_session()
-                    await asyncio.sleep(1.5 ** attempt)
+                    delay = (2 ** (attempt + 1)) * (5.0 if is_rate_limit else 1.0)
+                    if not is_rate_limit:
+                        await self._rotate_session()
+                    await asyncio.sleep(delay)
         raise ConnectionError(f"POST failed after {retries} attempts: {url[:120]}: {last_err}")
 
     async def download(self, url: str, dest: str, retries: int = 3) -> str:

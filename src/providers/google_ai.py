@@ -1,4 +1,4 @@
-"""Google AI Studio provider — Imagen 3 (images) + Veo 2 (videos).
+"""Google AI Studio provider — image gen + video gen (Veo).
 
 Pure REST API. No browser, no BotGuard, no captcha.
 Uses generativelanguage.googleapis.com endpoints directly.
@@ -11,7 +11,6 @@ import base64
 import logging
 import os
 import time
-from dataclasses import dataclass, field
 from typing import Optional
 
 from ..config import ProviderConfig
@@ -23,8 +22,8 @@ from .base import MediaItem, SearchResult
 log = logging.getLogger("mediaforge.google_ai")
 
 BASE = "https://generativelanguage.googleapis.com/v1beta"
-IMAGEN_MODEL = "imagen-3.0-generate-002"
-VEO_MODEL = "veo-2.0-generate-001"
+IMAGE_MODEL = "gemini-3.1-flash-image"
+VEO_MODEL = "veo-3.1-generate-preview"
 
 
 class GoogleAIProvider:
@@ -43,31 +42,28 @@ class GoogleAIProvider:
     def api_key(self) -> str:
         return self.cfg.api_key
 
-    async def _post_json(self, url: str, body: dict) -> dict:
+    async def _post_json(self, url: str, body: dict, retries: int = 5) -> dict:
         await self._limiter.acquire()
-        import aiohttp
         async with self._sem:
-            return await self.http.post_json(url, json=body)
+            return await self.http.post_json(url, json=body, retries=retries)
 
-    # --- Image generation (Imagen 3) ---
+    # --- Image generation (generateContent with IMAGE modality) ---
 
-    async def generate_image(self, prompt: str, aspect: str = "16:9",
-                             count: int = 1) -> list[bytes]:
-        url = f"{BASE}/models/{IMAGEN_MODEL}:predict?key={self.api_key}"
+    async def generate_image(self, prompt: str, count: int = 1) -> list[bytes]:
+        url = f"{BASE}/models/{IMAGE_MODEL}:generateContent?key={self.api_key}"
         body = {
-            "instances": [{"prompt": prompt}],
-            "parameters": {
-                "sampleCount": count,
-                "aspectRatio": aspect,
-                "safetyFilterLevel": "BLOCK_ONLY_HIGH",
+            "contents": [{"parts": [{"text": f"Generate an image: {prompt}"}]}],
+            "generationConfig": {
+                "responseModalities": ["IMAGE", "TEXT"],
             },
         }
         data = await self._post_json(url, body)
         images = []
-        for pred in data.get("predictions", []):
-            b64 = pred.get("bytesBase64Encoded", "")
-            if b64:
-                images.append(base64.b64decode(b64))
+        for cand in data.get("candidates", []):
+            for part in cand.get("content", {}).get("parts", []):
+                ib = part.get("inlineData", {})
+                if ib.get("data") and ib.get("mimeType", "").startswith("image/"):
+                    images.append(base64.b64decode(ib["data"]))
         return images
 
     async def generate_image_to_file(self, prompt: str, dest: str,
@@ -79,9 +75,9 @@ class GoogleAIProvider:
             shutil.copy2(cached, dest)
             return dest
 
-        imgs = await self.generate_image(prompt, aspect, count=1)
+        imgs = await self.generate_image(prompt, count=1)
         if not imgs:
-            raise RuntimeError(f"Imagen returned no images for: {prompt[:60]}")
+            raise RuntimeError(f"Image gen returned no images for: {prompt[:60]}")
 
         with open(dest, "wb") as f:
             f.write(imgs[0])
@@ -89,7 +85,7 @@ class GoogleAIProvider:
         self._gen_count += 1
         return dest
 
-    # --- Video generation (Veo 2) ---
+    # --- Video generation (Veo 3.1) ---
 
     async def generate_video(self, prompt: str, duration: int = 5,
                              aspect: str = "16:9",
@@ -166,7 +162,7 @@ class GoogleAIProvider:
             url=f"generate://{kind}/{uid}",
             provider="google_ai",
             title=query[:80],
-            artist="Google AI (Imagen/Veo)",
+            artist="Google AI",
             license="Google AI Studio ToS",
             page_url="https://aistudio.google.com",
             width=1280 if kind == "image" else 1920,

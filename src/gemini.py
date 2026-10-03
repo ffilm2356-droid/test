@@ -20,7 +20,7 @@ BASE = "https://generativelanguage.googleapis.com/v1beta"
 class GeminiClient:
     """Async Gemini chat client via REST API."""
 
-    def __init__(self, api_key: str, model: str = "gemini-2.0-flash",
+    def __init__(self, api_key: str, model: str = "gemini-3.8-flash",
                  http_client=None, concurrency: int = 50):
         self.api_key = api_key
         self.model = model
