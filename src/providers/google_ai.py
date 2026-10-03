@@ -24,7 +24,13 @@ from .base import MediaItem, SearchResult
 log = logging.getLogger("mediaforge.google_ai")
 
 BASE = "https://generativelanguage.googleapis.com/v1beta"
-IMAGE_MODEL = "gemini-3.1-flash-image"
+IMAGE_MODELS = [
+    "gemini-3.1-flash-image",
+    "gemini-3-pro-image",
+    "gemini-2.5-flash-image",
+    "gemini-3.1-flash-lite-image",
+]
+IMAGE_MODEL = IMAGE_MODELS[0]
 VEO_MODEL = "veo-3.1-generate-preview"
 CHAT_MODEL = "gemini-3.8-flash"
 
@@ -69,35 +75,58 @@ class GoogleAIProvider:
                 return data
             except Exception as e:
                 last_err = e
-                is_rate_limit = "429" in str(e) or "Too Many" in str(e)
+                err_str = str(e)
+                is_rate_limit = "429" in err_str or "Too Many" in err_str
+                is_server_err = any(c in err_str for c in ("503", "500", "502", "504"))
                 if is_rate_limit:
                     await self._key_pool.report_error(key, cooldown=30.0)
                     log.debug("key ...%s rate-limited, rotating", key[-6:])
+                elif is_server_err:
+                    log.debug("server error attempt %d: %s", attempt, err_str[:100])
                 else:
-                    log.debug("POST fail attempt %d: %s", attempt, e)
+                    log.debug("POST fail attempt %d: %s", attempt, err_str[:100])
                 if attempt < retries - 1:
-                    delay = 2.0 if is_rate_limit else (1.5 ** attempt)
+                    if is_rate_limit:
+                        delay = 2.0
+                    elif is_server_err:
+                        delay = 3.0 * (attempt + 1)
+                    else:
+                        delay = 1.5 ** attempt
                     await asyncio.sleep(delay)
         raise ConnectionError(f"GoogleAI POST failed after {retries} attempts: {last_err}")
 
     # --- Image generation (generateContent with IMAGE modality) ---
 
     async def generate_image(self, prompt: str, count: int = 1) -> list[bytes]:
-        url = f"{BASE}/models/{IMAGE_MODEL}:generateContent?key={{KEY}}"
         body = {
             "contents": [{"parts": [{"text": f"Generate an image: {prompt}"}]}],
             "generationConfig": {
                 "responseModalities": ["IMAGE", "TEXT"],
             },
         }
-        data = await self._post_json(url, body)
-        images = []
-        for cand in data.get("candidates", []):
-            for part in cand.get("content", {}).get("parts", []):
-                ib = part.get("inlineData", {})
-                if ib.get("data") and ib.get("mimeType", "").startswith("image/"):
-                    images.append(base64.b64decode(ib["data"]))
-        return images
+        last_err = None
+        for model in IMAGE_MODELS:
+            url = f"{BASE}/models/{model}:generateContent?key={{KEY}}"
+            try:
+                data = await self._post_json(url, body)
+                images = []
+                for cand in data.get("candidates", []):
+                    for part in cand.get("content", {}).get("parts", []):
+                        ib = part.get("inlineData", {})
+                        if ib.get("data") and ib.get("mimeType", "").startswith("image/"):
+                            images.append(base64.b64decode(ib["data"]))
+                if images:
+                    return images
+            except Exception as e:
+                last_err = e
+                err_str = str(e)
+                if "limit: 0" in err_str or ("429" in err_str and "quota" in err_str.lower()):
+                    log.debug("image model %s quota exhausted, trying next", model)
+                    continue
+                raise
+        if last_err:
+            raise last_err
+        raise RuntimeError("No image generation models available")
 
     async def generate_image_to_file(self, prompt: str, dest: str,
                                      aspect: str = "16:9") -> str:

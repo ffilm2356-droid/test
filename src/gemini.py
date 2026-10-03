@@ -17,16 +17,26 @@ log = logging.getLogger("mediaforge.gemini")
 
 BASE = "https://generativelanguage.googleapis.com/v1beta"
 
+FALLBACK_MODELS = [
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.5-flash",
+]
+
 
 class GeminiClient:
     """Async Gemini chat client via REST API with multi-key rotation."""
 
     def __init__(self, api_key: str = "", model: str = "gemini-3.8-flash",
                  http_client=None, concurrency: int = 50,
-                 api_keys: Optional[list[str]] = None):
+                 api_keys: Optional[list[str]] = None,
+                 fallback_models: Optional[list[str]] = None):
         self.model = model
         self.http = http_client
         self._sem = asyncio.Semaphore(concurrency)
+        self._fallback_models = fallback_models or [
+            m for m in FALLBACK_MODELS if m != model
+        ]
 
         keys = list(api_keys) if api_keys else []
         if api_key and api_key not in keys:
@@ -35,28 +45,47 @@ class GeminiClient:
             raise ValueError("GeminiClient requires at least one API key")
         self._key_pool = KeyPool(keys)
 
-    async def _call_api(self, body: dict) -> dict:
-        for attempt in range(3):
-            key = await self._key_pool.get()
-            url = f"{BASE}/models/{self.model}:generateContent?key={key}"
-            try:
-                async with self._sem:
-                    if self.http:
-                        data = await self.http.post_json(url, json=body, retries=1)
-                    else:
-                        import aiohttp
-                        async with aiohttp.ClientSession() as s:
-                            async with s.post(url, json=body) as r:
-                                r.raise_for_status()
-                                data = await r.json()
-                await self._key_pool.report_success(key)
-                return data
-            except Exception as e:
-                if "429" in str(e):
-                    await self._key_pool.report_error(key, cooldown=30.0)
-                if attempt == 2:
-                    raise
-                await asyncio.sleep(2.0 * (attempt + 1))
+    async def _call_api(self, body: dict, model: Optional[str] = None) -> dict:
+        target_model = model or self.model
+        models_to_try = [target_model] + [
+            m for m in self._fallback_models if m != target_model
+        ]
+
+        last_err = None
+        for mi, current_model in enumerate(models_to_try):
+            for attempt in range(3):
+                key = await self._key_pool.get()
+                url = f"{BASE}/models/{current_model}:generateContent?key={key}"
+                try:
+                    async with self._sem:
+                        if self.http:
+                            data = await self.http.post_json(url, json=body, retries=1)
+                        else:
+                            import aiohttp
+                            async with aiohttp.ClientSession() as s:
+                                async with s.post(url, json=body) as r:
+                                    r.raise_for_status()
+                                    data = await r.json()
+                    await self._key_pool.report_success(key)
+                    if mi > 0:
+                        log.info("model fallback: %s -> %s", target_model, current_model)
+                    return data
+                except Exception as e:
+                    last_err = e
+                    err_str = str(e)
+                    if "429" in err_str:
+                        await self._key_pool.report_error(key, cooldown=30.0)
+                    is_server_err = any(c in err_str for c in ("503", "500", "502", "504"))
+                    if is_server_err and mi < len(models_to_try) - 1:
+                        log.debug("%s returned %s, trying fallback model", current_model, err_str[:80])
+                        break
+                    if attempt == 2:
+                        if mi < len(models_to_try) - 1:
+                            log.debug("%s failed, trying fallback model", current_model)
+                            break
+                        raise
+                    await asyncio.sleep(2.0 * (attempt + 1))
+        raise last_err
 
     async def generate(self, prompt: str, system: Optional[str] = None,
                        temperature: float = 0.7, max_tokens: int = 2048,
